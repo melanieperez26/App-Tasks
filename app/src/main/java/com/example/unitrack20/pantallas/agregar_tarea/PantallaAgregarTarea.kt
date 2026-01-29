@@ -39,6 +39,8 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
 import com.example.unitrack20.util.ReminderReceiver
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 enum class AddType { TASK, EXAM }
 
@@ -65,6 +67,8 @@ fun PantallaAgregarTarea(
     var prioridad by remember { mutableStateOf("Normal") }
     var repetir by remember { mutableStateOf("Ninguno") }
     var recordatorioActivado by remember { mutableStateOf(false) }
+    var fechaValida by remember { mutableStateOf(true) }
+    var mensajeErrorFecha by remember { mutableStateOf<String?>(null) }
 
     val prioridades = listOf("Baja", "Normal", "Alta")
     val repetirOpciones = listOf("Ninguno", "Diario", "Semanal", "Mensual")
@@ -136,6 +140,29 @@ fun PantallaAgregarTarea(
                 titulo = it.getString("subject") ?: ""
                 fechaLimite = it.getString("date") ?: ""
             }
+        }
+    }
+
+    // --- Validación de fecha en tiempo real ---
+    LaunchedEffect(fechaLimite) {
+        if (fechaLimite.isNotBlank()) {
+            try {
+                val formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy")
+                val selectedDate = LocalDate.parse(fechaLimite, formatter)
+                if (selectedDate.isBefore(LocalDate.now())) {
+                    fechaValida = false
+                    mensajeErrorFecha = "No se permiten fechas pasadas"
+                } else {
+                    fechaValida = true
+                    mensajeErrorFecha = null
+                }
+            } catch (e: Exception) {
+                fechaValida = false
+                mensajeErrorFecha = "Formato de fecha inválido"
+            }
+        } else {
+            fechaValida = true // O false si la fecha es obligatoria
+            mensajeErrorFecha = null
         }
     }
 
@@ -232,7 +259,7 @@ fun PantallaAgregarTarea(
                 Button(
                     onClick = { if (!isSaving) guardar() },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
-                    enabled = !isSaving
+                    enabled = !isSaving && fechaValida
                 ) {
                     if (isSaving) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -312,6 +339,15 @@ fun PantallaAgregarTarea(
                                 fechaLimite = formatterDate.format(cal.time)
                             }
                         }) { Text("Seleccionar") }
+                    }
+
+                    if (mensajeErrorFecha != null) {
+                        Text(
+                            text = mensajeErrorFecha!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 16.dp, top = 4.dp)
+                        )
                     }
 
                     if (showMiniCalendar) {

@@ -29,6 +29,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import coil.compose.AsyncImage
@@ -36,6 +37,10 @@ import com.example.unitrack20.firebase.FirebaseRepository
 import com.example.unitrack20.firebase.Task as RepoTask
 import com.example.unitrack20.firebase.Exam as RepoExam
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.util.Calendar
+import android.app.DatePickerDialog
+import androidx.compose.ui.platform.LocalContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,7 +49,8 @@ fun PantallaInicio(
     openMenu: () -> Unit,
     onNavigateToProfile: () -> Unit,
     nombreUsuario: String,
-    refreshKey: Int = 0
+    refreshKey: Int = 0,
+    viewModel: PantallaInicioViewModel = viewModel()
 ) {
     val scope = rememberCoroutineScope()
     var loading by rememberSaveable { mutableStateOf(true) }
@@ -55,8 +61,6 @@ fun PantallaInicio(
 
     // Dialogo para crear tarea
     var showAddTaskDialog by remember { mutableStateOf(false) }
-    var newTaskTitle by remember { mutableStateOf("") }
-    var newTaskDue by remember { mutableStateOf("") }
 
     // Estados para el diálogo de confirmación de eliminación
     var showDeleteConfirmation by remember { mutableStateOf(false) }
@@ -319,44 +323,77 @@ fun PantallaInicio(
 
     // --- DIALOGO CREAR TAREA ---
     if (showAddTaskDialog) {
+        val context = LocalContext.current
+        val calendar = Calendar.getInstance()
+        val datePickerDialog = DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                viewModel.validateAndSetDate(LocalDate.of(year, month + 1, dayOfMonth))
+            },
+            calendar.get(Calendar.YEAR),
+            calendar.get(Calendar.MONTH),
+            calendar.get(Calendar.DAY_OF_MONTH)
+        )
+
         AlertDialog(
-            onDismissRequest = { showAddTaskDialog = false },
+            onDismissRequest = { showAddTaskDialog = false; viewModel.resetQuickAddTask() },
             confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        val uid = FirebaseRepository.currentUserUid()
-                        if (uid != null && newTaskTitle.isNotBlank()) {
-                            val res = FirebaseRepository.addTaskForUser(uid, newTaskTitle, newTaskDue.ifBlank { null })
-                            if (res.isSuccess) {
-                                val tasksRes = FirebaseRepository.getTasksForUser(uid)
-                                if (tasksRes.isSuccess) {
-                                    tareas.clear()
-                                    tareas.addAll(tasksRes.getOrNull() ?: emptyList())
+                TextButton(
+                    onClick = {
+                        viewModel.addQuickTask(
+                            onSuccess = {
+                                scope.launch {
+                                    // Forzar recarga de datos
+                                    val uid = FirebaseRepository.currentUserUid()
+                                    if (uid != null) {
+                                        val tasksRes = FirebaseRepository.getTasksForUser(uid)
+                                        if (tasksRes.isSuccess) {
+                                            tareas.clear()
+                                            tareas.addAll(tasksRes.getOrNull() ?: emptyList())
+                                        }
+                                    }
+                                    showAddTaskDialog = false
+                                }
+                            },
+                            onError = { errorMsg ->
+                                scope.launch {
+                                    // Aquí podrías mostrar un Snackbar
                                 }
                             }
-                        }
-                        showAddTaskDialog = false
-                        newTaskTitle = ""
-                        newTaskDue = ""
-                    }
-                }) { Text("Crear") }
+                        )
+                    },
+                    enabled = viewModel.taskName.isNotBlank() && viewModel.isDateValid
+                ) { Text("Crear") }
             },
             dismissButton = {
-                TextButton(onClick = { showAddTaskDialog = false }) { Text("Cancelar") }
+                TextButton(onClick = { showAddTaskDialog = false; viewModel.resetQuickAddTask() }) { Text("Cancelar") }
             },
-            title = { Text("Crear tarea") },
+            title = { Text("Crear tarea rápida") },
             text = {
                 Column {
                     OutlinedTextField(
-                        value = newTaskTitle,
-                        onValueChange = { newTaskTitle = it },
-                        placeholder = { Text("Título") }
+                        value = viewModel.taskName,
+                        onValueChange = { viewModel.onTaskNameChange(it) },
+                        label = { Text("Nombre de la tarea") },
+                        singleLine = true
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
                     OutlinedTextField(
-                        value = newTaskDue,
-                        onValueChange = { newTaskDue = it },
-                        placeholder = { Text("Fecha / Vencimiento") }
+                        value = viewModel.taskDate,
+                        onValueChange = { /* No editable manualmente */ },
+                        label = { Text("Fecha de entrega") },
+                        readOnly = true,
+                        trailingIcon = {
+                            IconButton(onClick = { datePickerDialog.show() }) {
+                                Icon(Icons.Default.CalendarToday, contentDescription = "Seleccionar fecha")
+                            }
+                        },
+                        isError = !viewModel.isDateValid,
+                        supportingText = {
+                            if (!viewModel.isDateValid) {
+                                Text(viewModel.dateErrorMessage ?: "", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
                     )
                 }
             }

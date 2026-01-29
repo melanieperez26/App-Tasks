@@ -4,11 +4,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBackIos
-import androidx.compose.material.icons.filled.ArrowForwardIos
+import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,13 +26,23 @@ import androidx.compose.ui.unit.sp
 import com.example.unitrack20.components.TopBar
 import com.example.unitrack20.firebase.FirebaseRepository
 import com.example.unitrack20.firebase.Task as RepoTask
+import com.example.unitrack20.firebase.Exam as RepoExam
+import java.text.SimpleDateFormat
 import java.util.*
+
+// Data class unificada para mostrar tanto tareas como examenes
+private data class CalendarItem(
+    val id: String,
+    val title: String,
+    val date: String,
+    val type: String // "tarea" o "examen"
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PantallaCalendario(openMenu: () -> Unit) {
     var currentMonth by remember { mutableStateOf(Calendar.getInstance()) }
-    var fechaSeleccionada by remember { mutableStateOf(Calendar.getInstance()) }
+    var fechaSeleccionada by remember { mutableStateOf<Calendar?>(null) }
 
     // Gradiente sutil de fondo consistente con el estilo "cool & elegant"
     val gradientColors = listOf(
@@ -38,12 +50,12 @@ fun PantallaCalendario(openMenu: () -> Unit) {
         MaterialTheme.colorScheme.surface.copy(alpha = 0.04f)
     )
 
-    // tareas y estado
-    val tareas = remember { mutableStateListOf<RepoTask>() }
+    // Tareas, examenes y estado
+    val calendarItems = remember { mutableStateListOf<CalendarItem>() }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    // cargar tareas del usuario
+    // Cargar tareas y examenes del usuario
     LaunchedEffect(Unit) {
         loading = true
         error = null
@@ -52,14 +64,30 @@ fun PantallaCalendario(openMenu: () -> Unit) {
             error = "Usuario no autenticado"
             loading = false
         } else {
-            val res = FirebaseRepository.getTasksForUser(uid)
-            if (res.isSuccess) {
-                tareas.clear()
-                tareas.addAll(res.getOrNull() ?: emptyList())
+            val tasksResult = FirebaseRepository.getTasksForUser(uid)
+            val examsResult = FirebaseRepository.getExamsForUser(uid)
+
+            if (tasksResult.isSuccess && examsResult.isSuccess) {
+                val tasks = tasksResult.getOrNull()?.map { CalendarItem(it.id, it.title, it.due ?: "", "tarea") } ?: emptyList()
+                val exams = examsResult.getOrNull()?.map { CalendarItem(it.id, it.subject, it.date ?: "", "examen") } ?: emptyList()
+                calendarItems.clear()
+                calendarItems.addAll(tasks + exams)
             } else {
-                error = res.exceptionOrNull()?.localizedMessage
+                error = tasksResult.exceptionOrNull()?.localizedMessage ?: examsResult.exceptionOrNull()?.localizedMessage
             }
             loading = false
+        }
+    }
+
+    val formatter = remember { SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()) }
+    val (formattedDate, itemsForDay) = remember(fechaSeleccionada, calendarItems) {
+        val localFechaSeleccionada = fechaSeleccionada
+        if (localFechaSeleccionada == null) {
+            null to emptyList()
+        } else {
+            val dateStr = formatter.format(localFechaSeleccionada.time)
+            val items = calendarItems.filter { it.date == dateStr }
+            dateStr to items
         }
     }
 
@@ -94,81 +122,92 @@ fun PantallaCalendario(openMenu: () -> Unit) {
         Column(modifier = Modifier.fillMaxSize()) {
             TopBar(title = "Calendario", onMenuClick = openMenu)
 
-            Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 14.dp)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp)
+            ) {
                 // header control
-                GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = {
-                            currentMonth = (currentMonth.clone() as Calendar).apply { add(Calendar.MONTH, -1) }
-                        }) {
-                            Icon(imageVector = Icons.Filled.ArrowBackIos, contentDescription = "Mes anterior", tint = MaterialTheme.colorScheme.onSurface)
-                        }
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                            val monthName = currentMonth.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.getDefault())
-                            val year = currentMonth.get(Calendar.YEAR)
-                            Text(text = "$monthName ${year}", style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface))
-                            Text(text = "Selecciona una fecha para ver tareas", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)))
-                        }
-
-                        IconButton(onClick = {
-                            currentMonth = (currentMonth.clone() as Calendar).apply { add(Calendar.MONTH, 1) }
-                        }) {
-                            Icon(imageVector = Icons.Filled.ArrowForwardIos, contentDescription = "Mes siguiente", tint = MaterialTheme.colorScheme.onSurface)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        WeekDaysRow()
-                        Spacer(modifier = Modifier.height(8.dp))
-                        CalendarioMes(monthCalendar = currentMonth, fechaSeleccionada = fechaSeleccionada, onFechaSeleccionada = { nueva ->
-                            fechaSeleccionada = nueva
-                        })
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                Text(text = "Tareas del ${fechaSeleccionada.get(Calendar.DAY_OF_MONTH)} / ${fechaSeleccionada.get(Calendar.MONTH) + 1}", style = MaterialTheme.typography.titleMedium.copy(fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface))
-                Spacer(modifier = Modifier.height(10.dp))
-
-                GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        if (loading) {
-                            Text(text = "Cargando tareas...", style = MaterialTheme.typography.bodyLarge)
-                        } else if (error != null) {
-                            Text(text = "Error: $error", color = MaterialTheme.colorScheme.error)
-                        } else {
-                            val tasksForDay = tareas.filter { task ->
-                                // intentamos comparar por campo due (dd/MM/yyyy)
-                                val due = task.due
-                                if (due.isNullOrBlank()) return@filter false
-                                try {
-                                    val parts = due.split("/")
-                                    val d = parts[0].toInt()
-                                    val m = parts[1].toInt() - 1
-                                    val y = parts[2].toInt()
-                                    val cal = Calendar.getInstance().apply { set(Calendar.YEAR, y); set(Calendar.MONTH, m); set(Calendar.DAY_OF_MONTH, d) }
-                                    cal.get(Calendar.YEAR) == fechaSeleccionada.get(Calendar.YEAR) && cal.get(Calendar.MONTH) == fechaSeleccionada.get(Calendar.MONTH) && cal.get(Calendar.DAY_OF_MONTH) == fechaSeleccionada.get(Calendar.DAY_OF_MONTH)
-                                } catch (_: Exception) {
-                                    false
-                                }
+                item {
+                    GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = {
+                                currentMonth = (currentMonth.clone() as Calendar).apply { add(Calendar.MONTH, -1) }
+                            }) {
+                                Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBackIos, contentDescription = "Mes anterior", tint = MaterialTheme.colorScheme.onSurface)
                             }
 
-                            if (tasksForDay.isEmpty()) {
-                                Text(text = "No hay tareas programadas", style = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface))
-                            } else {
-                                tasksForDay.forEach { t ->
-                                    ModernTaskRow(t)
-                                    Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                val monthName = currentMonth.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.getDefault())
+                                val year = currentMonth.get(Calendar.YEAR)
+                                Text(text = "$monthName ${year}", style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface))
+                                Text(text = "Selecciona una fecha para ver tareas", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)))
+                            }
+
+                            IconButton(onClick = {
+                                currentMonth = (currentMonth.clone() as Calendar).apply { add(Calendar.MONTH, 1) }
+                            }) {
+                                Icon(imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos, contentDescription = "Mes siguiente", tint = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                // Calendario
+                item {
+                    GlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            WeekDaysRow()
+                            Spacer(modifier = Modifier.height(8.dp))
+                            CalendarioMes(monthCalendar = currentMonth, fechaSeleccionada = fechaSeleccionada, onFechaSeleccionada = { nueva ->
+                                fechaSeleccionada = nueva
+                            })
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(18.dp))
+                }
+
+                // Lista de Tareas y Exámenes
+                if (fechaSeleccionada != null && formattedDate != null) {
+                    item {
+                        Text(
+                            text = "Tareas y exámenes para el $formattedDate",
+                            style = MaterialTheme.typography.titleMedium.copy(fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+
+                    if (loading) {
+                        item {
+                            Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    } else if (error != null) {
+                        item {
+                            Text(
+                                text = "Error: $error",
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
+                    } else if (itemsForDay.isEmpty()) {
+                        item {
+                            GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                                Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "No hay registros para este día.",
+                                        style = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface)
+                                    )
                                 }
                             }
+                        }
+                    } else {
+                        items(itemsForDay) { item ->
+                            ModernItemRow(item)
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                 }
@@ -176,6 +215,30 @@ fun PantallaCalendario(openMenu: () -> Unit) {
         }
     }
 }
+
+@Composable
+private fun ModernItemRow(item: CalendarItem) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(if (item.type == "tarea") MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.tertiary)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = item.title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
 
 @Composable
 fun WeekDaysRow() {
@@ -190,7 +253,7 @@ fun WeekDaysRow() {
 @Composable
 fun CalendarioMes(
     monthCalendar: Calendar,
-    fechaSeleccionada: Calendar,
+    fechaSeleccionada: Calendar?,
     onFechaSeleccionada: (Calendar) -> Unit
 ) {
     val clone = monthCalendar.clone() as Calendar
@@ -210,9 +273,11 @@ fun CalendarioMes(
                 week.forEach { day ->
                     Box(modifier = Modifier.weight(1f).padding(6.dp), contentAlignment = Alignment.Center) {
                         if (day != null) {
-                            val seleccionado = (fechaSeleccionada.get(Calendar.YEAR) == monthCalendar.get(Calendar.YEAR)
-                                    && fechaSeleccionada.get(Calendar.MONTH) == monthCalendar.get(Calendar.MONTH)
-                                    && fechaSeleccionada.get(Calendar.DAY_OF_MONTH) == day)
+                            val seleccionado = fechaSeleccionada?.let {
+                                it.get(Calendar.YEAR) == monthCalendar.get(Calendar.YEAR) &&
+                                it.get(Calendar.MONTH) == monthCalendar.get(Calendar.MONTH) &&
+                                it.get(Calendar.DAY_OF_MONTH) == day
+                            } ?: false
 
                             val bgColor = if (seleccionado) MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
                             else MaterialTheme.colorScheme.surface.copy(alpha = 0.06f)
