@@ -1,9 +1,13 @@
 package com.example.unitrack20.pantallas.agregar_tarea
 
+import android.Manifest
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -13,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.unitrack20.components.TopBar
 import com.example.unitrack20.firebase.FirebaseRepository
 import com.google.firebase.Timestamp
@@ -28,6 +34,11 @@ import com.google.firebase.firestore.DocumentSnapshot
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.os.Build
+import com.example.unitrack20.util.ReminderReceiver
 
 enum class AddType { TASK, EXAM }
 
@@ -67,12 +78,50 @@ fun PantallaAgregarTarea(
     val scrollState = rememberScrollState()
     var isSaving by remember { mutableStateOf(false) }
 
+    // --- Lógica de permisos de notificación ---
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            if (isGranted) {
+                recordatorioActivado = true
+                if (horaRecordatorio == null) {
+                    openTimePicker(context) { h, m -> horaRecordatorio = "%02d:%02d".format(h, m) }
+                }
+            } else {
+                scope.launch {
+                    snackbarHostState.showSnackbar("El permiso de notificación es necesario para los recordatorios.")
+                }
+            }
+        }
+    )
+
+    fun checkAndRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            when (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)) {
+                PackageManager.PERMISSION_GRANTED -> {
+                    recordatorioActivado = true
+                    if (horaRecordatorio == null) {
+                        openTimePicker(context) { h, m -> horaRecordatorio = "%02d:%02d".format(h, m) }
+                    }
+                }
+                else -> {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        } else {
+            recordatorioActivado = true
+            if (horaRecordatorio == null) {
+                openTimePicker(context) { h, m -> horaRecordatorio = "%02d:%02d".format(h, m) }
+            }
+        }
+    }
+
     // --- Cargar datos en modo edición ---
     LaunchedEffect(taskId, examId) {
         val uid = FirebaseRepository.currentUserUid() ?: return@LaunchedEffect
         var doc: DocumentSnapshot? = null
-        if (isTaskEditMode) doc = FirebaseRepository.getTask(uid, taskId!!)
-        else if (isExamEditMode) doc = FirebaseRepository.getExam(uid, examId!!)
+        if (isTaskEditMode) doc = FirebaseRepository.getTask(uid, taskId)
+        else if (isExamEditMode) doc = FirebaseRepository.getExam(uid, examId)
 
         doc?.let {
             if (isTaskEditMode) {
@@ -118,7 +167,7 @@ fun PantallaAgregarTarea(
                         "updatedAt" to Timestamp.now()
                     )
                     if (isTaskEditMode)
-                        FirebaseRepository.updateTask(uid, taskId!!, data).isSuccess
+                        FirebaseRepository.updateTask(uid, taskId, data).isSuccess
                     else
                         FirebaseRepository.addTaskDocument(uid, data).isSuccess
                 } else {
@@ -128,12 +177,16 @@ fun PantallaAgregarTarea(
                         "updatedAt" to Timestamp.now()
                     )
                     if (isExamEditMode)
-                        FirebaseRepository.updateExam(uid, examId!!, data).isSuccess
+                        FirebaseRepository.updateExam(uid, examId, data).isSuccess
                     else
                         FirebaseRepository.addExamDocument(uid, data).isSuccess
                 }
 
                 if (success) {
+                    if (recordatorioActivado && horaRecordatorio != null && fechaLimite.isNotBlank()) {
+                        scheduleReminder(context, titulo, descripcion, fechaLimite, horaRecordatorio!!)
+                    }
+
                     snackbarHostState.showSnackbar(
                         if (addType == AddType.TASK) "Tarea guardada" else "Examen guardado"
                     )
@@ -277,68 +330,166 @@ fun PantallaAgregarTarea(
 
                     Spacer(Modifier.height(12.dp))
 
-                    // --- Prioridad y Repetir ---
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
-                            Text("Prioridad", fontSize = 14.sp)
-                            Spacer(Modifier.height(6.dp))
-                            Row {
-                                prioridades.forEach { p ->
-                                    val selected = prioridad == p
-                                    Button(onClick = { prioridad = p }, modifier = Modifier.padding(end = 6.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)) {
-                                        Text(p)
-                                    }
-                                }
-                            }
-                        }
-
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("Repetir", fontSize = 14.sp)
-                            Spacer(Modifier.height(6.dp))
-                            Row {
-                                repetirOpciones.forEach { r ->
-                                    OutlinedButton(onClick = { repetir = r }, modifier = Modifier.padding(start = 4.dp)) {
-                                        Text(r, fontSize = 12.sp)
-                                    }
-                                }
+                    // --- Prioridad ---
+                    Text("Prioridad", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        prioridades.forEach { p ->
+                            val selected = prioridad == p
+                            ElevatedButton(
+                                onClick = { prioridad = p },
+                                colors = ButtonDefaults.elevatedButtonColors(
+                                    containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                                    contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                )
+                            ) {
+                                Text(p)
                             }
                         }
                     }
 
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(16.dp))
+
+                    // --- Repetir ---
+                    var repetirMenuOpen by remember { mutableStateOf(false) }
+                    Text("Repetir", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Box {
+                        OutlinedButton(
+                            onClick = { repetirMenuOpen = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(repetir, modifier = Modifier.padding(vertical = 8.dp))
+                        }
+                        DropdownMenu(
+                            expanded = repetirMenuOpen,
+                            onDismissRequest = { repetirMenuOpen = false },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            repetirOpciones.forEach { r ->
+                                DropdownMenuItem(
+                                    text = { Text(r) },
+                                    onClick = {
+                                        repetir = r
+                                        repetirMenuOpen = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
 
                     // --- Recordatorio ---
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Notifications, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Recordatorio")
-                        Spacer(Modifier.weight(1f))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Recordatorio", style = MaterialTheme.typography.titleMedium)
                         Switch(
                             checked = recordatorioActivado,
                             onCheckedChange = {
-                                recordatorioActivado = it
-                                if (it && horaRecordatorio == null)
-                                    openTimePicker(context) { h, m -> horaRecordatorio = "%02d:%02d".format(h, m) }
+                                if (it) {
+                                    checkAndRequestNotificationPermission()
+                                } else {
+                                    recordatorioActivado = false
+                                }
                             }
                         )
-                        Spacer(Modifier.width(8.dp))
-                        OutlinedTextField(
-                            value = horaRecordatorio ?: "No configurada",
-                            onValueChange = {},
-                            readOnly = true,
-                            modifier = Modifier.width(140.dp).clickable {
-                                openTimePicker(context) { h, m ->
-                                    horaRecordatorio = "%02d:%02d".format(h, m)
-                                    recordatorioActivado = true
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = {
+                            openTimePicker(context) { h, m ->
+                                horaRecordatorio = "%02d:%02d".format(h, m)
+                                if (!recordatorioActivado) {
+                                    checkAndRequestNotificationPermission()
                                 }
-                            },
-                            label = { Text("Hora") }
-                        )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = recordatorioActivado
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.Schedule, contentDescription = "Hora del recordatorio")
+                            Spacer(Modifier.width(8.dp))
+                            Text(horaRecordatorio ?: "Hora no configurada")
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+private fun scheduleReminder(
+    context: Context,
+    title: String,
+    message: String,
+    date: String,
+    time: String
+) {
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    val notificationId = System.currentTimeMillis().toInt()
+    val intent = Intent(context, ReminderReceiver::class.java).apply {
+        putExtra("title", title)
+        putExtra("message", message)
+        putExtra("notificationId", notificationId)
+    }
+    val pendingIntent = PendingIntent.getBroadcast(
+        context,
+        notificationId,
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val calendar = Calendar.getInstance()
+    val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+    try {
+        val parsedDate = dateFormat.parse(date)
+        val parsedTime = timeFormat.parse(time)
+
+        if (parsedDate != null && parsedTime != null) {
+            val dateCalendar = Calendar.getInstance().apply { this.time = parsedDate }
+            val timeCalendar = Calendar.getInstance().apply { this.time = parsedTime }
+
+            calendar.set(
+                dateCalendar.get(Calendar.YEAR),
+                dateCalendar.get(Calendar.MONTH),
+                dateCalendar.get(Calendar.DAY_OF_MONTH),
+                timeCalendar.get(Calendar.HOUR_OF_DAY),
+                timeCalendar.get(Calendar.MINUTE),
+                0
+            )
+
+            if (calendar.timeInMillis > System.currentTimeMillis()) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (alarmManager.canScheduleExactAlarms()) {
+                        alarmManager.setExact(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent)
+                    } else {
+                        // Fallback for when exact alarms are not permitted
+                        alarmManager.set(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent)
+                    }
+                } else {
+                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent)
+                }
+            }
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("scheduleReminder", "Error parsing date or time", e)
     }
 }
 

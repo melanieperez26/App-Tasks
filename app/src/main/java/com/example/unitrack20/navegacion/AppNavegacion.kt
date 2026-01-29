@@ -111,66 +111,18 @@ fun PantallaConMenu(nombreUsuario: String, onLogout: () -> Unit) {
         scope.launch { sheetState.show() }
     }
 
-    val bottomBarBrush = Brush.horizontalGradient(
-        colors = listOf(
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.08f),
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.02f)
-        )
-    )
-
     // observe internal nav destination to decide whether to show the global bottom bar
     val navBackStackEntry by internalNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val showGlobalBottomBar = currentRoute != "agregar_tarea"
 
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.systemBars,
         bottomBar = {
             if (showGlobalBottomBar) {
-                Surface(
-                    tonalElevation = 8.dp,
-                    shadowElevation = 8.dp,
-                    shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(72.dp)
-                        .background(bottomBarBrush)
-                ) {
-                    Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                        val items = listOf(
-                            BottomNavItem.Inicio,
-                            BottomNavItem.Calendario,
-                            BottomNavItem.AgregarTarea,
-                            BottomNavItem.Perfil
-                        )
-
-                        val navBackStackEntry by internalNavController.currentBackStackEntryAsState()
-                        val currentDestination = navBackStackEntry?.destination
-
-                        NavigationBar(
-                            containerColor = Color.Transparent,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            items.forEach { item ->
-                                val selected = currentDestination?.routeMatches(item.route) ?: false
-                                NavigationBarItem(
-                                    selected = selected,
-                                    onClick = {
-                                        internalNavController.navigate(item.route) {
-                                            popUpTo(internalNavController.graph.findStartDestination().id) { saveState = true }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    },
-                                    icon = item.icon,
-                                    label = { Text(item.label) },
-                                    alwaysShowLabel = true
-                                )
-                            }
-                        }
-                    }
-                }
+                AppBottomBar(navController = internalNavController)
             }
         }
     ) { innerPadding ->
@@ -245,6 +197,64 @@ fun PantallaConMenu(nombreUsuario: String, onLogout: () -> Unit) {
         }
     }
 }
+
+@Composable
+private fun AppBottomBar(navController: NavHostController) {
+    val bottomBarBrush = Brush.horizontalGradient(
+        colors = listOf(
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.08f),
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.02f)
+        )
+    )
+
+    Surface(
+        tonalElevation = 8.dp,
+        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bottomBarBrush)
+            .navigationBarsPadding()
+    ) {
+        Row(
+            Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val items = listOf(
+                BottomNavItem.Inicio,
+                BottomNavItem.Calendario,
+                BottomNavItem.AgregarTarea,
+                BottomNavItem.Perfil
+            )
+
+            val navBackStackEntry by navController.currentBackStackEntryAsState()
+            val currentDestination = navBackStackEntry?.destination
+
+            NavigationBar(
+                containerColor = Color.Transparent
+            ) {
+                items.forEach { item ->
+                    val selected = currentDestination?.routeMatches(item.route) ?: false
+                    NavigationBarItem(
+                        selected = selected,
+                        onClick = {
+                            navController.navigate(item.route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        icon = item.icon,
+                        label = { Text(item.label) },
+                        alwaysShowLabel = true
+                    )
+                }
+            }
+        }
+    }
+}
+
 
 private fun NavDestination?.routeMatches(route: String): Boolean {
     return this?.route == route || this?.route?.startsWith(route) == true
